@@ -7,39 +7,6 @@
 ;; 2. typechecking/elaborating into morphisms
 
 
-;;; ---------- UTILITIES ----------
-(define (list*/c fst . rest)
-  (if (null? rest) fst
-      (cons/c fst (apply list*/c rest))))
-
-;; A quasiquoter that generates contracts.
-(define-for-syntax quasiquote-contract
-  (syntax-parser
-    #:literals (unquote unquote-splicing)
-    [(_ name:id) #''name]
-    [(_ ,x:expr) #'x]
-    [(_ ,@x:expr) (error "uh-oh, that's a weird place to put an unquote-splicing")]
-    [(_ (x ... ,@tail)) #'(list*/c (quasiquote/c x) ... tail)]
-    [(_ (x ...)) #'(list/c (quasiquote/c x) ...)]))
-
-(define-syntax quasiquote/c quasiquote-contract)
-
-;; Makes quasiquote invoke quasiquote/c.
-(define-simple-macro (qq-flat-contract contract-expr)
-  #:with quasiquote (datum->syntax #'contract-expr 'quasiquote)
-  (let-syntax ([quasiquote quasiquote-contract]) contract-expr))
-
-;; A simple macro for defining flat contracts, where quasiquotation uses
-;; quasiquote/c.
-(define-syntax-rule (define-flat-contracts [name contract ...] ...)
-  (define-values (name ...)
-    (flat-murec-contract ([name (qq-flat-contract contract) ...] ...)
-     (values name ...))))
-
-(define-syntax-rule (define-flat-contract name contract ...)
-  (define-flat-contracts [name contract ...]))
-
-
 ;;; ---------- CATEGORICAL STRUCTURE ----------
 
 ;; a category maps names to generic morphisms or operations on morphisms.
@@ -141,12 +108,12 @@
 
 (define morphism? any/c) ; fixme
 (define term? any/c) ; fixme
-(define-flat-contract type?
-  `(* ,@(listof type?))
-  `(-> ,type? ,type?)
-  ;; base types
-  symbol?
-  )
+(define type?
+  (flat-rec-contract type?
+   (cons/c '* (listof type?))
+   (list/c '-> type? type?)
+   ;; base types
+   symbol?))
 
 (define (subtype? x y) (equal? x y))
 
