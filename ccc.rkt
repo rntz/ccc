@@ -14,9 +14,7 @@
 
 ;; instead of using a parameter to pass this around I should maybe use
 ;; parameterized modules or just a function.
-(define/contract the-cat
-  (parameter/c category/c)
-  (make-parameter #f))
+(define/contract the-cat (parameter/c category/c) (make-parameter #f))
 
 ;; The category of single-argument racket functions. I use (A -> B) for
 ;; meta-level functions, (A → B) for morphisms, and (A => B) for exponential
@@ -97,7 +95,7 @@
 
 
 ;;; ---------- FRONTEND / TYPECHECKER ----------
-;; Syntax supported:
+;; Syntax:
 ;; (isa type term)      -- type ascription
 ;; (let ([x term] ...) term)
 ;; (cons term ...)      -- makes a tuple; can be empty, (cons)
@@ -115,7 +113,7 @@
    ;; base types
    symbol?))
 
-(define (subtype? x y) (equal? x y))
+(define subtype? equal?)
 
 (define/contract the-context
   (parameter/c context?)
@@ -154,6 +152,7 @@
        (match n [1 (values A (pi1))] [2 (values B (pi2))]))
      (inferred tp (compose proj xm))]
     ;; functions & application
+    ;; TODO: curried/multi-argument function syntax
     [`(lambda (,x) ,e)
      (expecting `(-> ,A ,B)
       (define-values (newctx extend-morph) (context-extend (the-context) x A))
