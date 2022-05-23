@@ -6,6 +6,35 @@
 ;; 1. defining the category structure
 ;; 2. typechecking/elaborating into morphisms
 
+;; # TODO #
+;;
+;; 0. a list of test programs I'd like to write
+;; 1. practical features that I can use to write test programs
+;; 2. more "features": Incremental, AutoDiff
+;; 3. more backends, eg: JS, WASM
+;;
+;; # LANG FEATURES #
+;;
+;; modal types (graded?!)
+;; info flow types
+;; finite sets, set comprehensions -> Datafun
+;;
+;; # IMPL FEATURES #
+;;
+;; incremental computation
+;; automatic differentiation
+;;
+;; # BACKENDS #
+;;
+;; Quoted Racket code
+;; Javascript
+;; WASM???
+;;
+;; # EXAMPLE PROGRAMS #
+;;
+;; AD: simple formulae for trig stuff
+;; Datafun: simple conjunctive queries, transitive closure
+
 
 ;;; ---------- CATEGORICAL STRUCTURE ----------
 
@@ -24,7 +53,7 @@
    'id (lambda (x) x)
    'compose (lambda (f g) (lambda (x) (f (g x))))
    ;; terminal object
-   'into-terminal (lambda (x) '())
+   'ignore (lambda (x) '())
    ;; pairs
    'pi1 car 'pi2 cdr
    'pair (lambda (f g) (lambda (x) (cons (f x) (g x))))
@@ -40,8 +69,43 @@
              (lambda (env) ;; morphism
                (lambda (a) ;; exponential
                  (f (cons env a)))))
-   ;; eval: (A => B) × A → B
-   'eval (match-lambda [(cons f x) (f x)])
+   ;; apply: (A => B) × A → B
+   'apply (match-lambda [(cons f x) (f x)])
+   ))
+
+;; morphisms are expressions for single-argument functions
+(define/contract racket-expr-cat category/c
+  (hash
+   ;; 'id '(lambda (x) x)
+   ;; 'compose (lambda (f g) `(lambda (x) (,f (,g x))))
+   'id 'identity
+   'compose (lambda (f g) `(compose1 ,f ,g))
+   'into-terminal `(lambda (x) '())
+   'pi1 'car 'pi2 'cdr
+   'pair (lambda (f g) `(lambda (x) (cons (,f x) (,g x))))
+   ;; lambda: (Γ x A → B) -> (Γ → (A => B))
+   'lambda (lambda (f) `(lambda (env) (lambda (x) (,f (cons env x)))))
+   ;; apply: (A => B) × A → B
+   'apply `(lambda (x) ((car x) (cdr x)))
+   ))
+
+;; morphisms are syntax transformers.
+;; TODO: use (make-syntax-introducer) here for hygiene
+(define/contract racket-syntax-cat category/c
+  (hash
+   'id      identity
+   'compose compose1
+   'into-terminal (const '())
+   'pi1 (lambda (e) `(car ,e))
+   'pi2 (lambda (e) `(cdr ,e))
+   'pair (lambda (f g) (lambda (e) `(cons ,(f e) ,(g e))))
+   ;; lambda: (Γ x A → B) -> (Γ → (A => B))
+   'lambda (lambda (f)
+             (lambda (e)
+               (let ((env (gensym 'env)) (x (gensym 'x)))
+                 `(lambda (,env) (lambda (,x) ,(f `(cons ,env ,x)))))))
+   ;; apply: (A => B) × A → B
+   'apply (lambda (e) `(let ((tmp ,e)) ((car tmp) (cdr tmp))))
    ))
 
 
@@ -62,7 +126,7 @@
 (define (pi2) (cat pi2))
 (define (pair f g) ((cat pair) f g))
 (define (cat-lambda f) ((cat lambda) f))
-(define (cat-eval) (cat eval))
+(define (cat-apply) (cat apply))
 
 
 ;; ---------- CONTEXTS ----------
@@ -164,32 +228,44 @@
     [`(,e1 ,e2)
      (match-define-values (`(-> ,A ,B) e1m) (synth e1))
      (define e2m (check A e2))
-     (inferred B (pipe (pair e1m e2m) (cat-eval)))]))
+     (inferred B (pipe (pair e1m e2m) (cat-apply)))]))
 
 
 ;; Tests
 (require racket/trace)
 #;(trace elab #;context-get #;context-extend)
 
-(module+ test
-  (require (rename-in rackunit (check ru:check))
-           racket/splicing)
-  (the-cat racket-cat)
+(module+ examples
+  (provide (all-defined-out))
+  (the-cat racket-syntax-cat)
 
-  ;; id-morph: ∅ → (a => a)
+  (define id-type '(-> a a))
   (define id-stx '(lambda (x) x))
-  (define id-morph (check '(-> a a) id-stx))
-  (check-equal? "lol" ((id-morph '()) "lol"))
+  (define (id-morph) (check id-type id-stx))
 
-  (define flip-stx '(lambda (f) (lambda (b) (lambda (a) ((f a) b)))))
+  (define const-type '(-> a (-> b a)))
+  (define const-stx '(lambda (x) (lambda (y) x)))
+  (define (const-morph) (check const-type const-stx))
+
   (define flip-type '(-> (-> a (-> b c)) (-> b (-> a c))))
-  (define flip-morph (check flip-type flip-stx))
-  (check-equal? '(b a) ((((flip-morph '()) (lambda (x) (lambda (y) (list x y)))) 'a) 'b))
-
-  ;; flip const == const id
+  (define flip-stx '(lambda (f) (lambda (b) (lambda (a) ((f a) b)))))
+  (define (flip-morph) (check flip-type flip-stx))
   (define constid-stx
     `((isa (-> (-> a (-> b a)) (-> b (-> a a))) ,flip-stx)
       (lambda (a) (lambda (b) a))))
-  (define constid-morph (check '(-> b (-> a a)) constid-stx))
-  (check-equal? 'produced (((constid-morph '()) 'ignored) 'produced))
+  (define (constid-morph) (check '(-> b (-> a a)) constid-stx))
+  )
+
+(module+ test
+  (require (rename-in rackunit (check ru:check))
+           racket/splicing)
+  (require (submod ".." examples))
+  (the-cat racket-cat)
+
+  ;; id-morph: ∅ → (a => a)
+  (check-equal? "lol" (((id-morph) '()) "lol"))
+  (check-equal? '(b a) (((((flip-morph) '()) (lambda (x) (lambda (y) (list x y)))) 'a) 'b))
+
+  ;; flip const == const id
+  (check-equal? 'produced ((((constid-morph) '()) 'ignored) 'produced))
   )
