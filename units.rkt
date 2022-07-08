@@ -63,10 +63,12 @@
    tuple   ;; (Γ → Aᵢ)ᵢⁿ -> (Γ → Πᵢⁿ Aᵢ)
    ))
 
+(define-signature cat->stlc^ extends stlc^ (finalize))
 (define-unit cat->stlc@
   (import cat^ contexts^ products^ (prefix exp: exponentials^))
-  (export stlc^)
+  (export cat->stlc^)
   ;; our Γ → A is represented as (ctx -> (Γ → A))
+  (define (finalize f) ((f context-empty) 'ignored))
   (define ((var name) ctx) (context-get ctx name))
   (define ((app e1 e2) ctx) (compose (pair (e1 ctx) (e2 ctx)) exp:eval))
   (define ((lam x e) ctx)
@@ -87,15 +89,15 @@
 
 (define-compound-unit/infer racket-stlc@
   (import)
-  (export stlc^ contexts^)
+  (export cat->stlc^)
   (link racket+contexts@ cat->stlc@))
 
 
 (module+ test
   (require rackunit)
   (define-values/invoke-unit/infer racket-stlc@)
-  (check-eqv? 2 ((((lam 'x (var 'x)) context-empty) 'ignored) 2))
-  (check-eqv? 0 ((((lam 'x (project 0 2 (var 'x))) context-empty) 'ignored) '(0 . 1)))
+  (check-eqv? 2 ((finalize (lam 'x (var 'x))) 2))
+  (check-eqv? 0 ((finalize (lam 'x (project 0 2 (var 'x)))) '(0 . 1)))
   (check-equal? '(0 . 0)
-                ((((lam 'x (tuple (var 'x) (var 'x))) context-empty) 'ignored) '0))
+                ((finalize (lam 'x (tuple (var 'x) (var 'x)))) '0))
   )
