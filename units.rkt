@@ -31,7 +31,7 @@
   (define ((split f g) x)
     (match x [`(left ,y) (f y)] [`(rght ,y) (g y)]))
   (define (from-initial _) (error "impossible"))
-  (define (eval x) ((car x) (cdr x)))
+  (define (eval x) ((pi1 x) (pi2 x)))
   (define (((transpose f) a) b) (f (cons a b)))
   )
 
@@ -43,7 +43,8 @@
     (match ctx
       ['() (error "unbound symbol")]
       [(cons (== sym) _) pi2]
-      [(cons _ xs) (compose pi1 (context-get xs sym))]))
+      [(cons _ xs) (compose (context-get xs sym) pi1)]))
+  ;; Γ × A → Γ,A
   (define (context-extend ctx sym)
     (values (cons sym ctx) identity)))
 
@@ -97,6 +98,7 @@
   (require rackunit)
   (define-values/invoke-unit/infer racket-stlc@)
   (check-eqv? 2 ((finalize (lam 'x (var 'x))) 2))
+  (check-eqv? 1 (((finalize (lam 'x (lam 'y (var 'x)))) 1) 2))
   (check-eqv? 0 ((finalize (lam 'x (project 0 2 (var 'x)))) '(0 . 1)))
   (check-equal? '(0 . 0)
                 ((finalize (lam 'x (tuple (var 'x) (var 'x)))) '0))
