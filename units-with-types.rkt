@@ -135,9 +135,16 @@
     ;; maybe the right way to do this is in Dan Ghica's work somewhere.
     (define delta (for/list ([_ Δ]) (gensym 'arg)))
     (dataflow-node!
+     `(lambda _ (lambda ,delta ,@(string->racket-body morph (append gamma delta))))
+     gamma
+     (for/list ([_ Ω]) (gensym 'result)))
+    ;; ;; Version which captures twice but feels more "in the spirit" of dataflow.
+    #;
+    (dataflow-node!
      `(lambda ,gamma (lambda ,delta ,@(string->racket-body morph (append gamma delta))))
      gamma
-     (for/list ([_ Ω]) (gensym 'result)))))
+     (for/list ([_ Ω]) (gensym 'result)))
+    ))
 
 
 ;; ---------- STLC ----------
