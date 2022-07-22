@@ -147,7 +147,7 @@
     ))
 
 
-;; ---------- STLC ----------
+;; ---------- Explicitly typed STLC ----------
 (define-signature stlc^
   (var       ;; Γ, x, A    ->  Γ → A      where x:A ∈ Γ
    lam       ;; Γ, x, A, B ->  Γ,x:A → B          ->  Γ → A => B
@@ -172,9 +172,9 @@
   (define ((var Γ x A))
     (select Γ (hash-ref (stlc-context) x)))
   (define (((lam Γ x A B) e))
-    ;; (stlc-with '(x) (e)): Γ,A → B
+    ;; (stlc-with `(,x) (e)): Γ,A → B
     ;; want: Γ → (A) => (B)
-    ((curry Γ `(,A) `(,B)) (stlc-with '(x) (e))))
+    ((curry Γ `(,A) `(,B)) (stlc-with `(,x) (e))))
   (define (((app Γ A B) e1 e2))
     ;; e1               Γ → A => B
     ;; e2               Γ → A
@@ -199,22 +199,79 @@
                  (expr) (split As))))
      (stlc-with xs (body)))))
 
+
+;; ---------- Bidirectional typechecking ----------
+(define-signature bidir^ (check infer elab))
+
+(define type? any/c)
+(define term? any/c)
+
+(define (subtype? x y) (equal? x y))
+
+(define-unit stlc->bidir@
+  (import stlc^)
+  (export bidir^)
+  (define context (make-parameter (hash)))
+  (define Γ (make-parameter '()))
+  (define (elab ctx tp term)
+    #;(-> (listof (list/c symbol? type?)) type? term?
+          (values type? any/c))
+    (parameterize ([context (apply hash (append* ctx))]
+                   [Γ (map second ctx)])
+      (infer term tp)))
+  (define (check e t)
+    (define-values (tp term) (infer e t))
+    term)
+  (define (infer e [expect #f])
+    (define (found tp term)
+      (when (and expect (not (subtype? tp expect)))
+        (error 'infer "found ~s want ~s" tp expect))
+      (values tp term))
+    (match e
+      [(? symbol? x)
+       (define A (hash-ref (context) x (lambda () (error 'infer "unbound variable ~s" x))))
+       (found A (var (Γ) x A))]
+      [`(tuple ,@es)
+       (match-define `(tuple ,@As) expect)
+       (unless (length=? As es) (error 'infer "tuple has wrong length"))
+       (values expect (apply (apply tuple (Γ) As)
+                             (map check es As)))]
+      ;; TODO: let-tuple
+      [`(let-tuple ,@_) TODO]
+      [`(lambda (,x) ,e)
+       (match-define `(-> ,A ,B) expect)
+       (values expect
+               ((lam (Γ) x A B)
+                (parameterize ([Γ (append (Γ) `(,A))]
+                               [context (hash-set (context) x A)])
+                  (check e B))))]
+      ;; fallthrough case: function application
+      [`(,e1 ,e2)
+       (match-define-values  (`(-> ,A ,B) m1) (infer e1))
+       (define m2 (check e2 A))
+       (found B ((app (Γ) A B) m1 m2))]
+      )))
+
+
+;; ---------- TESTS ----------
 (define-compound-unit/infer stlc-strings@
   (import)
-  (export stlc^)
-  (link strings@ concat->stlc@))
+  (export stlc^ bidir^)
+  (link strings@ concat->stlc@ stlc->bidir@))
 
 (module+ test
   (require rackunit)
   (define-values/invoke-unit/infer stlc-strings@)
 
-  (define (run xs Γ A term)
+  (define (run ctx tp term)
+    (define vars (map first ctx))
+    (define-values (_ stlc-term) (elab ctx tp term))
     (define string-maker
-      (parameterize ([stlc-context (stlc-extend xs (hash))])
-        (term)))
+      (parameterize ([stlc-context (stlc-extend vars (hash))])
+        (stlc-term)))
     (define-values (outs nodes)
      (parameterize ([dataflow-nodes '()])
-       (define outs (string-maker xs))
+       (define outs (string-maker vars))
        (values outs (reverse (dataflow-nodes)))))
     ;; a very simple compilation into Racket code.
     `(let ()
@@ -229,15 +286,25 @@
           [`(,x) x]
           [outs `(values ,@outs)])))
 
-  (define Γ '(A B))
   (pretty-print
-   (run '(a b) Γ '((tuple B A))
-        ((tuple Γ 'B 'A)
-         (var Γ 'b 'B)
-         (var Γ 'a 'A))))
+   (run '((a A) (b B)) '(tuple B A) '(tuple b a)))
+  (pretty-print
+   (run '((a A)) '(-> B A) '(lambda (b) a)))
+  (pretty-print
+   (run '() '(-> A (-> B A)) '(lambda (a) (lambda (b) a))))
+  (pretty-print
+   (run '() '(-> A (tuple A A)) '(lambda (a) (tuple a a))))
 
-  (pretty-print
-   (run '(a) '(A) '((-> (B) (A)))
-        ((lam '(A) 'b 'B 'A)
-         (var '(A B) 'a 'A))))
+  ;; (define Γ '(A B))
+  ;; (pretty-print
+  ;;  (run '(a b) Γ '((tuple B A))
+  ;;       ;; a:A, b:B ⊢ (b,a) : B × A
+  ;;       ((tuple Γ 'B 'A)
+  ;;        (var Γ 'b 'B)
+  ;;        (var Γ 'a 'A))))
+
+  ;; (pretty-print
+  ;;  (run '(a) '(A) '((-> (B) (A)))
+  ;;       ((lam '(A) 'b 'B 'A)
+  ;;        (var '(A B) 'a 'A))))
   )
