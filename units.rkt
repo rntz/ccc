@@ -1,145 +1,310 @@
 #lang racket
 
 (require (prefix-in racket: racket))
+(require (only-in racket/hash hash-union))
 (require syntax/parse/define)
 
 (define-syntax-parser TODO
   [_ #'(error "TODO: unimplemented")])
 
 (define (reverse-compose1 . procs) (apply compose1 (reverse procs)))
+(define (reverse-compose . procs) (apply compose (reverse procs)))
+(define (list->values l) (apply values l))
+(define (length=? A B) (= (length A) (length B)))
 
+
+;;; ---------- SIGNATURES ----------
 (define-signature cat^
-  (nop ;; A → A
-   seq ;; A → B, B → C, ..., Y → Z -> A → Z
-   (define-values (after) (lambda xs (apply seq (reverse xs))))))
-(define-signature products^ (pi1 pi2 pair into-terminal))
-(define-signature sums^ (in1 in2 split from-initial))
-(define-signature exponentials^ (eval transpose))
-
-(define-signature contexts^
-  (context-empty  ;; ctx
-   context-get    ;; ctx, sym -> Γ → A
-   context-extend ;; ctx, sym -> ctx, (Γ × A → Γ,A)
+  (nop ;; (A: obj) -> A → A
+   seq ;; ([A, ..., Z]: list obj) -> A → B, B → C, ..., Y → Z -> A → Z
    ))
 
-;; cartesian concategory stuff
-(define-signature cartesian^ extends cat^
-  (parallel ;; Γ₁ → Δ₁, ..., Γₙ → Δₙ -> (Γ₁ ... Γₙ → Δ₁ ... Δₙ)
-   ;permute  ;; π:permutation -> Γ → π(Γ)
-   rename   ;; ρ:renaming -> ρ(Γ) → Γ
-   merge ;; n -> A₁, ..., Aₙ → A₁ ⊗ ... ⊗ Aₙ
-   split ;; n -> A₁ ⊗ ... ⊗ Aₙ → A₁, ..., Aₙ
-   ;; ;; swap: A ⊗ B → B ⊗ A
-   ;; (define-values (swap) (seq (split 2) (rename 1 0) (merge 2)))
+;; cartesian concategory
+(define-signature cartesian-concat^ ; extends cat^
+  (;;parallel ;; (Γᵢ, Δᵢ, Γᵢ → Δᵢ)ᵢ -> (Γ₁ ... Γₙ → Δ₁ ... Δₙ)
+   ;;permute  ;; Γ, π -> π(Γ) → Γ
+   parallel ;; (Γᵢ)ᵢ, (Δᵢ)ᵢ -> (Γᵢ → Δᵢ)ᵢ -> (Γ₁ ... Γₙ → Δ₁ ... Δₙ)
+   fork     ;; Γ, (Δᵢ)ᵢ -> (Γ → Δᵢ)ᵢ -> Γ → (Δᵢ)ᵢ
+   ;; TODO: fork can be derived from rename & para, omit or define it?
+   rename   ;; Γ, ρ -> ρ(Γ) → Γ
+   merge    ;; (Aᵢ)ᵢ -> A₁, ..., Aₙ → A₁ ⊗ ... ⊗ Aₙ
+   split    ;; (Aᵢ)ᵢ -> A₁ ⊗ ... ⊗ Aₙ → A₁, ..., Aₙ
+   (define-values (select) (lambda (Γ . idxs) (rename Γ idxs)))
    ))
 
-(define-unit racket@
+;; ;; closed concategory, v1
+;; (define-signature closed-concat^
+;;   (eval      ;; Γ, Δ    -> (Γ => Δ), Γ → Δ
+;;    transpose ;; Γ, Δ, Ω -> (Γ,Δ → Ω) -> Γ → (Δ => Ω)
+;;    ))
+
+;; closed concategory, v2 (thanks Jacques Carette for the suggestion)
+(define-signature closed-concat^
+  (uncurry ;; Γ, Δ, Ω  ->  Γ → (Δ => Ω)  ->  Γ,Δ → Ω
+   curry   ;; Γ, Δ, Ω  ->  (Γ,Δ → Ω)     ->  Γ → (Δ => Ω)
+   ))
+
+
+#;
+(define-unit racket-multi@
   (import)
-  (export cat^ products^ sums^ exponentials^ contexts^)
-  (define nop racket:identity)
-  (define seq reverse-compose1)
-
-  (define pi1 car)
-  (define pi2 cdr)
-  (define ((pair f g) x) (cons (f x) (g x)))
-  (define (into-terminal x) '())
-  (define (in1 x) `(left ,x))
-  (define (in2 x) `(rght ,x))
-  (define ((split f g) x)
-    (match x [`(left ,y) (f y)] [`(rght ,y) (g y)]))
-  (define (from-initial _) (error "impossible"))
-  (define (eval x) ((pi1 x) (pi2 x)))
-  (define (((transpose f) a) b) (f (cons a b)))
-
-  ;; using hashtables to pass around contexts.
-  ;; could use vectors or lists instead.
-  (define context-empty (void))
-  (define ((context-get _ sym) h) (hash-ref h sym))
-  (define (context-extend _ sym)
-    (values (void) (match-lambda [(cons h x) (hash-set h sym x)])))
+  (export cartesian-concat^)
+  (define (nop As) values)
+  (define (seq As . funcs) (apply compose (reverse funcs)))
+  (define ((parallel tagged-funcs) . inputs)
+    TODO)
   )
 
-(define-unit products->contexts@
-  (import cat^ products^)
-  (export contexts^)
-  (define context-empty '())
-  (define (context-get ctx sym)
-    (match ctx
-      ['() (error "unbound symbol")]
-      [(cons (== sym) _) pi2]
-      [(cons _ xs) (after (context-get xs sym) pi1)]))
-  ;; Γ × A → Γ,A
-  (define (context-extend ctx sym)
-    (values (cons sym ctx) nop)))
-
-(define-compound-unit/infer racket+contexts@
-  (import)
-  ;; ugh, look at all this boilerplate.
-  (export cat^ products^ sums^ exponentials^ contexts)
-  (link
-   (((cat : cat^) (products : products^)
-     (_0 : sums^) (_1 : exponentials^))
-    racket@)
-   (((contexts : contexts^)) products->contexts@ cat products)
-   ))
 
 
-;; ---------- CARTESIAN STRING DIAGRAMS ----------
+;;; ---------- STRINGS ----------
+;; TODO: shouldn't we be putting type info here?
 (define dataflow-nodes (make-parameter '()))
 (define/contract (dataflow-node! morphism ins outs)
-  (-> (or/c symbol? syntax?) (listof symbol?) (listof symbol?) void?)
-  (dataflow-nodes (cons (list morphism ins outs) (dataflow-nodes))))
-(define (dataflow-call! function . ins)
-  (define out (gensym))
-  (dataflow-node! function ins `(,out))
-  (list out))
+  ;; TODO: probably don't want any/c here
+  (-> (or/c symbol? syntax? any/c) (listof symbol?) (listof symbol?) (listof symbol?))
+  (dataflow-nodes (cons (list morphism ins outs) (dataflow-nodes)))
+  outs)
+(define (dataflow-apply! function ins)
+  (define out (gensym (cond [(symbol? function) function]
+                            [(identifier? function) (syntax-e function)]
+                            [#t "tmp"])))
+  (dataflow-node! function ins `(,out)))
+(define (dataflow-call! function . ins) (dataflow-apply! function ins))
+
+(define-signature string-extras^ (string->racket-body string->racket))
+(define-unit strings@
+  (import)
+  (export cat^ cartesian-concat^ closed-concat^ string-extras^)
+  (define (string->racket-body morph inputs)
+    (define-values (outs nodes)
+      (parameterize ([dataflow-nodes '()])
+        (define outs (morph inputs))
+        (values outs (reverse (dataflow-nodes)))))
+    `(,@(for/list ([n nodes])
+          (match-define (list func ins outs) n)
+          (match outs
+            ['() `(,func ,@ins)]
+            [`(,x) `(define ,x (,func ,@ins))]
+            [xs `(define-values ,xs (,func ,@ins))]))
+      ,(match outs
+         ['() '(void)]
+         [`(,x) x]
+         [outs `(values ,@outs)])))
+  (define (string->racket morph inputs)
+    `(let () ,@(string->racket-body morph)))
+
+  ;; -- concategory --
+  (define (nop A) identity)
+  (define ((seq . As) . funcs) (apply compose1 (reverse funcs)))
+  (define (((parallel Γs Δs) fs) inputs)
+    ;; #:do not available until Racket 8.4
+    #;(for/list ([Γ Γs] [Δ Δs] [f fs]
+               #:do [(define-values (before after) (split-at inputs (length Γ)))
+                     (set! inputs after)]
+               [out (f before)])
+      out)
+    (append*
+     (for/list ([Γ Γs] [Δ Δs] [f fs])
+       (define-values (before after) (split-at inputs (length Γ)))
+       (set! inputs after)
+       (define outs (f before))
+       (unless (length=? Δ outs) (error "wrong # of outputs"))
+       outs)))
+
+  ;; -- cartesian --
+  ;; Γ, (Δᵢ)ᵢ -> (Γ → Δᵢ)ᵢ -> Γ → (Δᵢ)ᵢ
+  (define (((fork Γ Δs) fs) inputs)
+    (for*/list ([f fs] [x (f inputs)]) x))
+  (define ((rename Γ rho) inputs)
+    (for/list ([i rho]) (list-ref inputs i)))
+  (define ((merge As) inputs)
+    (unless (= (length As) (length inputs)) (error "wrong # of inputs"))
+    (dataflow-apply! 'list inputs))
+  (define ((split As) inputs)
+    (unless (= 1 (length inputs)) (error "too many inputs"))
+    (dataflow-node! 'list->values inputs (for/list ([_ As]) (gensym 'list->values))))
+
+  ;; -- closed --
+  (define (((uncurry Γ Δ Ω) morph) inputs)
+    (define-values (gamma delta) (split-at inputs (length Γ)))
+    (match-define `(,f) (morph gamma))
+    (dataflow-apply! 'apply (cons f delta)))
+  (define (((curry Γ Δ Ω) morph) gamma)
+    ;; TODO: this feels kinda hackish. it also generates slightly ugly code.
+    ;; maybe the right way to do this is in Dan Ghica's work somewhere.
+    (define delta (for/list ([_ Δ]) (gensym 'arg)))
+    (dataflow-node!
+     `(lambda _ (lambda ,delta ,@(string->racket-body morph (append gamma delta))))
+     gamma
+     (for/list ([_ Ω]) (gensym 'result)))
+    ;; ;; Version which captures twice but feels more "in the spirit" of dataflow.
+    #;
+    (dataflow-node!
+     `(lambda ,gamma (lambda ,delta ,@(string->racket-body morph (append gamma delta))))
+     gamma
+     (for/list ([_ Ω]) (gensym 'result)))
+    ))
 
 
-;; ---------- SIMPLY TYPED λ-CALCULUS ----------
+;; ---------- Explicitly typed STLC ----------
 (define-signature stlc^
-  (var     ;; x -> (Γ → A)      where x:A ∈ Γ
-   lam     ;; x, (Γ,x:A → B) -> (Γ → A => B)
-   app     ;; (Γ → A => B), (Γ → A) -> (Γ → B)
-   project ;; i, n, (Γ → Πᵢⁿ Aᵢ) -> (Γ → Aᵢ)
-   tuple   ;; (Γ → Aᵢ)ᵢⁿ -> (Γ → Πᵢⁿ Aᵢ)
+  (var       ;; Γ, x, A    ->  Γ → A      where x:A ∈ Γ
+   lam       ;; Γ, x, A, B ->  Γ,x:A → B          ->  Γ → A => B
+   app       ;; Γ, A, B    ->  Γ → A => B, Γ → A  ->  Γ → B
+   tuple     ;; Γ, Aᵢ...   ->  (Γ → Aᵢ)...        ->  Γ → Πᵢⁿ Aᵢ
+   let-tuple ;; Γ, (xᵢ)ᵢ, (Aᵢ)ᵢ, B  ->  Γ → Πᵢ Aᵢ, Γ,(xᵢ:Aᵢ)ᵢ → B -> Γ → B
    ))
 
-(define-signature cat->stlc^ extends stlc^ (finalize))
-(define-unit cat->stlc@
-  (import cat^ contexts^ products^ (prefix exp: exponentials^))
-  (export cat->stlc^)
-  ;; our Γ → A is represented as (ctx -> (Γ → A))
-  (define (finalize f) ((f context-empty) (hash)))
-  (define ((var name) ctx) (context-get ctx name))
-  (define ((app e1 e2) ctx) (seq exp:eval (pair (e1 ctx) (e2 ctx))))
-  (define ((lam x e) ctx)
-    (define-values (e-ctx extend-morph) (context-extend ctx x))
-    ;; exp:transpose : (Γ × A → B) -> (Γ → A => B)
-    (exp:transpose (seq extend-morph (e e-ctx))))
-  (define ((project i n e) ctx)
-    (match n
-      [1 (e ctx)]
-      [2 (seq (e ctx) (match i [0 pi1] [1 pi2]))]
-      [_ TODO]))
-  (define ((tuple . es) ctx)
-    (match es
-      [`() into-terminal]
-      [`(,e) (e ctx)]
-      [`(,e1 ,e2) (pair (e1 ctx) (e2 ctx))]
-      [_ TODO])))
+(define stlc-context (make-parameter (hash)))
+(define (stlc-extend xs [ctx (stlc-context)])
+  (hash-union ctx (for/hash ([x xs] [i (in-naturals (hash-count ctx))])
+                    (values x i))))
+(define-syntax-rule (stlc-with xs body ...)
+  (parameterize ([stlc-context (stlc-extend xs)]) body ...))
 
-(define-compound-unit/infer racket-stlc@
-  (import)
-  (export cat->stlc^)
-  (link racket@ cat->stlc@))
+;; uncurry ;; Γ, Δ, Ω  ->  Γ → (Δ => Ω)  ->  Γ,Δ → Ω
+;; curry   ;; Γ, Δ, Ω  ->  (Γ,Δ → Ω)     ->  Γ → (Δ => Ω)
+
+(define-unit concat->stlc@
+  (import cat^ cartesian-concat^ closed-concat^)
+  (export stlc^)
+  (define ((var Γ x A))
+    (select Γ (hash-ref (stlc-context) x)))
+  (define (((lam Γ x A B) e))
+    ;; (stlc-with `(,x) (e)): Γ,A → B
+    ;; want: Γ → (A) => (B)
+    ((curry Γ `(,A) `(,B)) (stlc-with `(,x) (e))))
+  (define (((app Γ A B) e1 e2))
+    ;; e1               Γ → A => B
+    ;; e2               Γ → A
+    ;; fork (id, e2)    Γ → Γ,A         <- we compose
+    ;; uncurry e1       Γ,A → B         <- these two
+    ;; desired          Γ → B
+    ((seq Γ (append Γ `(,A)) `(,B))
+     ((fork Γ `(,Γ (,A)))
+      (list (nop Γ) (e2)))
+     ((uncurry Γ `(,A) `(,B))
+      (e1))))
+  (define (((tuple Γ . As) . es))
+    ((seq Γ As `((tuple ,@As)))
+     ((fork Γ (map list As))
+      (map (lambda (x) (x)) es))
+     (merge As)))
+  (define (((let-tuple Γ xs As B) expr body))
+    ((seq Γ (append Γ As) `(,B))
+     ;; fork id (expr;split)
+     ((fork Γ (list Γ As))
+      (list nop ((seq `(,Γ ((tuple ,@As)) ,As))
+                 (expr) (split As))))
+     (stlc-with xs (body)))))
 
 
+;; ---------- Bidirectional typechecking ----------
+(define-signature bidir^ (check infer elab))
+
+(define type? any/c)
+(define term? any/c)
+
+(define (subtype? x y) (equal? x y))
+
+(define-unit stlc->bidir@
+  (import stlc^)
+  (export bidir^)
+  (define context (make-parameter (hash)))
+  (define Γ (make-parameter '()))
+  (define (elab ctx tp term)
+    #;(-> (listof (list/c symbol? type?)) type? term?
+          (values type? any/c))
+    (parameterize ([context (apply hash (append* ctx))]
+                   [Γ (map second ctx)])
+      (infer term tp)))
+  (define (check e t)
+    (define-values (tp term) (infer e t))
+    term)
+  (define (infer e [expect #f])
+    (define (found tp term)
+      (when (and expect (not (subtype? tp expect)))
+        (error 'infer "found ~s want ~s" tp expect))
+      (values tp term))
+    (match e
+      [(? symbol? x)
+       (define A (hash-ref (context) x (lambda () (error 'infer "unbound variable ~s" x))))
+       (found A (var (Γ) x A))]
+      [`(tuple ,@es)
+       (match-define `(tuple ,@As) expect)
+       (unless (length=? As es) (error 'infer "tuple has wrong length"))
+       (values expect (apply (apply tuple (Γ) As)
+                             (map check es As)))]
+      ;; TODO: let-tuple
+      [`(let-tuple ,@_) TODO]
+      [`(lambda (,x) ,e)
+       (match-define `(-> ,A ,B) expect)
+       (values expect
+               ((lam (Γ) x A B)
+                (parameterize ([Γ (append (Γ) `(,A))]
+                               [context (hash-set (context) x A)])
+                  (check e B))))]
+      ;; fallthrough case: function application
+      [`(,e1 ,e2)
+       (match-define-values  (`(-> ,A ,B) m1) (infer e1))
+       (define m2 (check e2 A))
+       (found B ((app (Γ) A B) m1 m2))]
+      )))
+
+
+;; ---------- TESTS ----------
+(define-compound-unit/infer stlc-strings@
+  (import)
+  (export stlc^ bidir^)
+  (link strings@ concat->stlc@ stlc->bidir@))
+
 (module+ test
   (require rackunit)
-  (define-values/invoke-unit/infer racket-stlc@)
-  (check-eqv? 2 ((finalize (lam 'x (var 'x))) 2))
-  (check-eqv? 1 (((finalize (lam 'x (lam 'y (var 'x)))) 1) 2))
-  (check-eqv? 0 ((finalize (lam 'x (project 0 2 (var 'x)))) '(0 . 1)))
-  (check-equal? '(0 . 0)
-                ((finalize (lam 'x (tuple (var 'x) (var 'x)))) '0))
+  (define-values/invoke-unit/infer stlc-strings@)
+
+  (define (run ctx tp term)
+    (define vars (map first ctx))
+    (define-values (_ stlc-term) (elab ctx tp term))
+    (define string-maker
+      (parameterize ([stlc-context (stlc-extend vars (hash))])
+        (stlc-term)))
+    (define-values (outs nodes)
+     (parameterize ([dataflow-nodes '()])
+       (define outs (string-maker vars))
+       (values outs (reverse (dataflow-nodes)))))
+    ;; a very simple compilation into Racket code.
+    `(let ()
+       ,@(for/list ([n nodes])
+           (match-define (list func ins outs) n)
+           (match outs
+             ['() `(,func ,@ins)]
+             [`(,x) `(define ,x (,func ,@ins))]
+             [xs `(define-values ,xs (,func ,@ins))]))
+       ,(match outs
+          ['() '(void)]
+          [`(,x) x]
+          [outs `(values ,@outs)])))
+
+  (pretty-print
+   (run '((a A) (b B)) '(tuple B A) '(tuple b a)))
+  (pretty-print
+   (run '((a A)) '(-> B A) '(lambda (b) a)))
+  (pretty-print
+   (run '() '(-> A (-> B A)) '(lambda (a) (lambda (b) a))))
+  (pretty-print
+   (run '() '(-> A (tuple A A)) '(lambda (a) (tuple a a))))
+
+  ;; (define Γ '(A B))
+  ;; (pretty-print
+  ;;  (run '(a b) Γ '((tuple B A))
+  ;;       ;; a:A, b:B ⊢ (b,a) : B × A
+  ;;       ((tuple Γ 'B 'A)
+  ;;        (var Γ 'b 'B)
+  ;;        (var Γ 'a 'A))))
+
+  ;; (pretty-print
+  ;;  (run '(a) '(A) '((-> (B) (A)))
+  ;;       ((lam '(A) 'b 'B 'A)
+  ;;        (var '(A B) 'a 'A))))
   )
