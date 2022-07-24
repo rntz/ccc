@@ -95,8 +95,8 @@
 ;; shouldn't we be putting type info in our dataflow graph?
 (define dataflow-nodes (make-parameter '()))
 (define/contract (dataflow-node! morphism ins outs)
-  ;; TODO: probably don't want any/c here
-  (-> (or/c symbol? syntax? any/c) (listof symbol?) (listof symbol?) (listof symbol?))
+  (-> (or/c symbol? syntax? procedure?) (listof symbol?) (listof symbol?)
+      (listof symbol?))
   (dataflow-nodes (cons (list morphism ins outs) (dataflow-nodes)))
   outs)
 (define (dataflow-apply! function ins)
@@ -110,6 +110,10 @@
 (define-unit strings@
   (import)
   (export cat^ cartesian-concat^ closed-concat^ string-extras^)
+  ;; wow this sucks
+  ;; this really intertwines strings with the racket backend.
+  ;; need to find a way to untangle this.
+  #;
   (define (string->racket-body morph inputs)
     (define-values (outs nodes)
       (parameterize ([dataflow-nodes '()])
@@ -125,8 +129,48 @@
          ['() '(void)]
          [`(,x) x]
          [outs `(values ,@outs)])))
+
+  (define (string->racket-pair morph inputs)
+    (define-values (outs nodes)
+      (parameterize ([dataflow-nodes '()])
+        (define outs (morph inputs))
+        (values outs (reverse (dataflow-nodes)))))
+    ;; A fairly simple compilation into Racket code. This does some simple
+    ;; output-inlining. it could be generalized by noticing when a node produces
+    ;; a single output which is used only once and inlining that computation
+    ;; into its consumer.
+    (define direct-outputs (make-hash))
+    (define (output x) (hash-ref direct-outputs x (lambda () x)))
+    (define definitions
+      (append*
+       (for/list ([n nodes])
+         (match-define (list func ins outs) n)
+         (define term
+           (cond [(procedure? func) (func ins)]
+                 [(or (symbol? func) (syntax? func)) `(,func ,@ins)]
+                 [#t (error "uh oh")]))
+         (match outs
+           ['() `(,term)]
+           [`(,x)
+            #:when (member x outs)
+            (hash-set! direct-outputs x term)
+            '()]
+           [`(,x) `((define ,x term))]
+           [xs `((define-values ,xs term))]))))
+    (define result
+      (match outs
+        ['() '(void)]
+        [`(,x) (output x)]
+        [outs `(values ,@(map output outs))]))
+    (values definitions result))
+
+  (define (string->racket-body morph inputs)
+    (define-values (definitions result) (string->racket-pair morph inputs))
+    (append definitions (list result)))
+
   (define (string->racket morph inputs)
-    `(let () ,@(string->racket-body morph)))
+    (define-values (definitions result) (string->racket-pair morph inputs))
+    (if (null? definitions) result `(let () ,@definitions ,result)))
 
   ;; -- concategory --
   (define (nop Γ) identity)
@@ -167,7 +211,9 @@
     (define delta
       (for/list ([(x A) (in-context Δ)]) (gensym x)))
     (dataflow-node!
-     `(lambda _ (lambda ,delta ,@(string->racket-body morph (append gamma delta))))
+     ;; yes I mean to shadow gamma here
+     (lambda (gamma) `(lambda ,delta ,@(string->racket-body morph (append gamma delta))))
+     #;`(lambda _ (lambda ,delta ,@(string->racket-body morph (append gamma delta))))
      gamma
      (for/list ([(x A) (in-context Ω)]) (gensym x)))
     ;; ;; Version which captures twice but feels more "in the spirit" of dataflow.
@@ -287,7 +333,7 @@
 ;; ---------- TESTS ----------
 (define-compound-unit/infer stlc-strings@
   (import)
-  (export stlc^ bidir^)
+  (export stlc^ bidir^ string-extras^)
   (link strings@ concat->stlc@ stlc->bidir@))
 
 (module+ test
@@ -297,38 +343,8 @@
   (define (run ctx tp term)
     (set! ctx (list->context ctx))
     (define vars (map first ctx))
-    (define-values (_ string-maker) (elab ctx tp term))
-    (define-values (outs nodes)
-     (parameterize ([dataflow-nodes '()])
-       (define outs (string-maker vars))
-       (values outs (reverse (dataflow-nodes)))))
-    ;; A fairly simple compilation into Racket code. this does some simple
-    ;; output-inlining. it could be generalized by noticing when a node produces
-    ;; a single output which is used only once and inlining that computation
-    ;; into its consumer.
-    (define direct-outputs (make-hash))
-    (define (output x)
-      (hash-ref direct-outputs x (lambda () x)))
-    (define definitions
-      (append*
-       (for/list ([n nodes])
-         (match-define (list func ins outs) n)
-         (match outs
-           ['() `((,func ,@ins))]
-           [`(,x)
-            #:when (member x outs)
-            (hash-set! direct-outputs x `(,func ,@ins))
-            '()]
-           [`(,x) `((define ,x (,func ,@ins)))]
-           [xs `((define-values ,xs (,func ,@ins)))]))))
-    (define result
-      (match outs
-        ['() '(void)]
-        [`(,x) (output x)]
-        [outs `(values ,@(map output outs))]))
-    (if (null? definitions)
-        result
-        `(let () ,@definitions ,result)))
+    (define-values (_ string) (elab ctx tp term))
+    (string->racket string vars))
 
   (pretty-print
    (run '((a A) (b B)) '(tuple B A) '(tuple b a)))
