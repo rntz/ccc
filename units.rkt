@@ -291,7 +291,6 @@
 (define-unit stlc->bidir@
   (import stlc^)
   (export bidir^)
-  ;; TODO: rewrite to use contexts
   (define Γ (make-parameter context-empty))
   (define (elab ctx tp term)
     #;(-> (listof (list/c symbol? type?)) type? term?
